@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import pystray
 from PIL import Image
 import threading
@@ -20,6 +20,9 @@ class MimirApp:
         
         # LLM setup - model will be loaded based on config
         self.llm = None
+        
+        # Conversation history
+        self.conversation_history = []  # List of tuples: (user_message, ai_response)
         
         # Check if we should pre-load the model
         try:
@@ -65,9 +68,10 @@ class MimirApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         
-        # Create both frames but only show one at a time
+        # Create frames but only show one at a time
         self.create_input_frame()
         self.create_output_frame()
+        self.create_settings_frame()
         
         # Show input frame initially
         self.show_input_page()
@@ -158,14 +162,16 @@ class MimirApp:
         self.input_frame = ttk.Frame(self.root, padding="10")
         
         # Configure grid weights for resizing
-        self.input_frame.columnconfigure(0, weight=1)  # Make column 0 expandable
+        self.input_frame.columnconfigure(0, weight=0)  # Make column 0 expandable
         self.input_frame.columnconfigure(1, weight=0)  # Keep column 1 fixed
+        self.input_frame.columnconfigure(2, weight=1)  # Keep column 2 fixed
+        self.input_frame.columnconfigure(3, weight=0)  # Keep column 3 fixed
         self.input_frame.rowconfigure(0, weight=1)     # Make row 0 (text field area) expandable
         self.input_frame.rowconfigure(1, weight=0)     # Keep row 1 (buttons) fixed
         
         # Text input field - spans most of the window
         self.text_entry = tk.Text(self.input_frame, wrap=tk.WORD)
-        self.text_entry.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        self.text_entry.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
         # Bind Enter key to send button (Shift+Enter and Ctrl+Enter for new line)
         self.text_entry.bind('<Return>', lambda event: self.send_text_from_key(event))
@@ -176,9 +182,17 @@ class MimirApp:
         self.close_button = ttk.Button(self.input_frame, text="Close", command=self.quit_app)
         self.close_button.grid(row=1, column=0, sticky=tk.W)
         
+        # New Chat button (bottom left-center)
+        self.new_chat_button = ttk.Button(self.input_frame, text="New Chat", command=self.clear_conversation_history)
+        self.new_chat_button.grid(row=1, column=1, sticky=tk.W, padx=(0, 0))
+        
+        # Settings button (bottom center)
+        self.settings_button = ttk.Button(self.input_frame, text="Settings", command=self.show_settings_page)
+        self.settings_button.grid(row=1, column=2, sticky=tk.W, padx=(0, 0))
+        
         # Send button (bottom right)
         self.send_button = ttk.Button(self.input_frame, text="Send", command=self.send_text)
-        self.send_button.grid(row=1, column=1, sticky=tk.E)
+        self.send_button.grid(row=1, column=3, sticky=tk.E)
         
     def create_output_frame(self):
         """Create the output page frame"""
@@ -202,20 +216,279 @@ class MimirApp:
         self.back_button = ttk.Button(self.output_frame, text="Back", command=self.show_input_page)
         self.back_button.grid(row=1, column=1, sticky=tk.E)
 
+    def create_settings_frame(self):
+        """Create the settings page frame"""
+        self.settings_frame = ttk.Frame(self.root, padding="10")
+        
+        # Configure grid weights for settings page
+        self.settings_frame.columnconfigure(0, weight=1)
+        self.settings_frame.rowconfigure(0, weight=1)
+        self.settings_frame.rowconfigure(1, weight=0)
+        
+        # Create scrollable frame for settings
+        self.settings_canvas = tk.Canvas(self.settings_frame)
+        self.settings_scrollbar = ttk.Scrollbar(self.settings_frame, orient="vertical", command=self.settings_canvas.yview)
+        self.settings_scrollable_frame = ttk.Frame(self.settings_canvas)
+        
+        # Configure scrollable frame to expand properly
+        self.settings_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+        )
+        
+        # Bind canvas to expand with window
+        self.settings_canvas.bind(
+            "<Configure>",
+            lambda e: self.settings_canvas.itemconfig(self.canvas_frame_id, width=e.width-20)
+        )
+        
+        self.canvas_frame_id = self.settings_canvas.create_window((0, 0), window=self.settings_scrollable_frame, anchor="nw")
+        self.settings_canvas.configure(yscrollcommand=self.settings_scrollbar.set)
+        
+        # Bind mouse wheel events for scrolling anywhere in the canvas area
+        def _on_mousewheel(event):
+            self.settings_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        def _bind_to_mousewheel(event):
+            self.settings_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        def _unbind_from_mousewheel(event):
+            self.settings_canvas.unbind_all("<MouseWheel>")
+        
+        # Bind mouse wheel events to canvas and scrollable frame
+        self.settings_canvas.bind('<Enter>', _bind_to_mousewheel)
+        self.settings_canvas.bind('<Leave>', _unbind_from_mousewheel)
+        self.settings_scrollable_frame.bind('<Enter>', _bind_to_mousewheel)
+        self.settings_scrollable_frame.bind('<Leave>', _unbind_from_mousewheel)
+        
+        self.settings_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.settings_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Load current config and create settings widgets
+        self.settings_vars = {}
+        self.create_settings_widgets()
+        
+        # Buttons frame
+        self.settings_buttons_frame = ttk.Frame(self.settings_frame)
+        self.settings_buttons_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.settings_buttons_frame.columnconfigure(0, weight=1)
+        self.settings_buttons_frame.columnconfigure(1, weight=0)
+        
+        # Back button (bottom left)
+        self.settings_back_button = ttk.Button(self.settings_buttons_frame, text="Back", command=self.show_input_page)
+        self.settings_back_button.grid(row=0, column=0, sticky=tk.W)
+        
+        # Save button (bottom right)
+        self.settings_save_button = ttk.Button(self.settings_buttons_frame, text="Save", command=self.save_settings)
+        self.settings_save_button.grid(row=0, column=1, sticky=tk.E)
+        
+    def create_settings_widgets(self):
+        """Create individual setting widgets based on config.json"""
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Config Error", f"Failed to load config: {e}")
+            return
+        
+        # Setting descriptions for tooltips
+        setting_descriptions = {
+            "llm_gguf_path": "Path to the GGUF model file for the LLM",
+            "llm_max_tokens": "Maximum number of tokens to generate in a response",
+            "llm_n_ctx": "Context window size (number of tokens the model can consider)",
+            "keep_model_loaded": "Whether to keep the model loaded in memory for faster responses",
+            "llm_temperature": "Controls randomness in generation (0.0 = deterministic, 1.0 = very random)",
+            "llm_top_p": "Nucleus sampling parameter (probability threshold for token selection)",
+            "llm_n_threads": "Number of CPU threads to use (0 = use all available)",
+            "llm_f16_kv": "Use 16-bit floating point for key-value cache (saves memory)",
+            "llm_n_batch": "Batch size for processing tokens",
+            "llm_n_ubatch": "Micro-batch size for processing tokens",
+            "llm_system_prompt": "System prompt that defines the AI assistant's behavior",
+            "open_text_key": "Global hotkey to open the text input window",
+            "conversation_history_length": "Number of previous message pairs to remember in conversation history"
+        }
+        
+        # Configure the main grid for proper alignment
+        self.settings_scrollable_frame.columnconfigure(0, weight=0, minsize=200)  # Fixed width for labels
+        self.settings_scrollable_frame.columnconfigure(1, weight=1, minsize=300)  # Expandable for inputs
+        
+        row = 0
+        for setting_key, setting_value in config.items():
+            # Setting label with tooltip
+            label = ttk.Label(self.settings_scrollable_frame, text=f"{setting_key}:")
+            label.grid(row=row, column=0, sticky=(tk.W, tk.N), padx=(10, 20), pady=5)
+            
+            # Add tooltip
+            if setting_key in setting_descriptions:
+                self.create_tooltip(label, setting_descriptions[setting_key])
+            
+            # Create appropriate widget based on value type
+            if isinstance(setting_value, bool):
+                # Checkbox for boolean values
+                var = tk.BooleanVar(value=setting_value)
+                widget = ttk.Checkbutton(self.settings_scrollable_frame, variable=var)
+                widget.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+                
+            elif isinstance(setting_value, (int, float)):
+                # Number entry for numeric values
+                var = tk.StringVar(value=str(setting_value))
+                widget = ttk.Entry(self.settings_scrollable_frame, textvariable=var, width=30)
+                widget.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+                
+                # Validate numeric input
+                widget.configure(validate='key', validatecommand=(self.root.register(self.validate_numeric), '%P'))
+                
+            elif setting_key == "llm_gguf_path":
+                # File picker for GGUF path
+                var = tk.StringVar(value=setting_value)
+                
+                path_frame = ttk.Frame(self.settings_scrollable_frame)
+                path_frame.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+                path_frame.columnconfigure(0, weight=1)
+                
+                entry = ttk.Entry(path_frame, textvariable=var)
+                entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+                
+                browse_button = ttk.Button(path_frame, text="Browse", 
+                                         command=lambda: self.browse_file(var, "GGUF Files", "*.gguf"))
+                browse_button.grid(row=0, column=1, sticky=tk.E)
+                
+                widget = path_frame
+                
+            else:
+                # Text entry for string values
+                var = tk.StringVar(value=setting_value)
+                if setting_key == "llm_system_prompt":
+                    # Text widget for multi-line system prompt
+                    widget = tk.Text(self.settings_scrollable_frame, height=4, wrap=tk.WORD, width=50)
+                    widget.insert("1.0", setting_value)
+                    widget.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+                else:
+                    # Regular entry for other strings
+                    widget = ttk.Entry(self.settings_scrollable_frame, textvariable=var, width=30)
+                    widget.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+            
+            # Store the variable for saving later
+            self.settings_vars[setting_key] = (var if not setting_key == "llm_system_prompt" else widget, type(setting_value))
+            
+            row += 1
+
 
     def show_input_page(self):
         """Show the input page frame"""
         self.output_frame.grid_remove()  # Hide output frame
+        self.settings_frame.grid_remove()  # Hide settings frame
         self.input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show input frame
         self.text_entry.focus()  # Focus on text entry
         
     def show_output_page(self):
         """Show the output page frame"""
         self.input_frame.grid_remove()  # Hide input frame
+        self.settings_frame.grid_remove()  # Hide settings frame
         self.output_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show output frame 
         
+    def show_settings_page(self):
+        """Show the settings page frame"""
+        self.input_frame.grid_remove()  # Hide input frame
+        self.output_frame.grid_remove()  # Hide output frame
+        self.settings_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show settings frame
+        
+    def create_tooltip(self, widget, text):
+        """Create a tooltip for a widget"""
+        def on_enter(event):
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            
+            label = tk.Label(tooltip, text=text, background="lightyellow", 
+                           relief="solid", borderwidth=1, font=("Arial", "8", "normal"))
+            label.pack()
+            
+            widget.tooltip = tooltip
+            
+        def on_leave(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                del widget.tooltip
+                
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
+        
+    def validate_numeric(self, value):
+        """Validate numeric input"""
+        if value == "":
+            return True
+        try:
+            float(value)
+            return True
+        except ValueError:
+            return False
+            
+    def browse_file(self, var, file_type, file_extension):
+        """Open file browser and set the selected file path"""
+        filename = filedialog.askopenfilename(
+            title=f"Select {file_type}",
+            filetypes=[(file_type, file_extension), ("All files", "*.*")]
+        )
+        if filename:
+            var.set(filename)
+            
+    def save_settings(self):
+        """Save current settings to config.json"""
+        try:
+            config = {}
+            for setting_key, (var_or_widget, original_type) in self.settings_vars.items():
+                if setting_key == "llm_system_prompt":
+                    # Text widget
+                    value = var_or_widget.get("1.0", tk.END).strip()
+                else:
+                    # StringVar, BooleanVar, etc.
+                    value = var_or_widget.get()
+                
+                # Convert to original type
+                if original_type == bool:
+                    config[setting_key] = bool(value)
+                elif original_type == int:
+                    config[setting_key] = int(float(value)) if value else 0
+                elif original_type == float:
+                    config[setting_key] = float(value) if value else 0.0
+                else:
+                    config[setting_key] = str(value)
+            
+            # Save to file
+            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=4)
+                
+            messagebox.showinfo("Settings Saved", "Settings have been saved successfully!")
+            
+            # Reset LLM if model path changed
+            self.llm = None
+            
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save settings: {e}")
+            
+    def clear_conversation_history(self):
+        """Clear the conversation history"""
+        self.conversation_history = []
+        messagebox.showinfo("History Cleared", "Conversation history has been cleared.")
+    
+    def create_history_prompt(self):
+        """Create a prompt string from conversation history using ChatML format"""
+        if not self.conversation_history:
+            return ""
+        
+        history_prompt = ""
+        for user_msg, ai_response in self.conversation_history:
+            history_prompt += f"<|im_start|>user\n{user_msg}<|im_end|>\n"
+            history_prompt += f"<|im_start|>assistant\n{ai_response}<|im_end|>\n"
+        
+        return history_prompt
+
     def minimize_to_tray(self):
-        """Minimize window to system tray"""
+        """Minimize window to system tray and clear conversation history"""
+        self.conversation_history = []  # Clear history when minimizing
         self.root.withdraw()  # Hide the window
             
     def show_window(self, icon=None, item=None):
@@ -282,8 +555,9 @@ class MimirApp:
                 temperature = self.get_config_value("llm_temperature")
                 top_p = self.get_config_value("llm_top_p")
                 
-                # Format prompt with ChatML format
-                full_prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+                # Create history prompt and format full prompt with ChatML format
+                history_prompt = self.create_history_prompt()
+                full_prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n{history_prompt}<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
                 
                 res = self.llm.create_completion(
                     prompt=full_prompt,
@@ -292,6 +566,20 @@ class MimirApp:
                     top_p=top_p,
                 )
                 result = res["choices"][0]["text"].strip()
+                
+                # Add to conversation history
+                self.conversation_history.append((prompt, result))
+                
+                # Trim history to configured length
+                try:
+                    max_history = self.get_config_value("conversation_history_length")
+                    if len(self.conversation_history) > max_history:
+                        self.conversation_history = self.conversation_history[-max_history:]
+                except Exception:
+                    # If config fails, default to keeping last 10 exchanges
+                    if len(self.conversation_history) > 10:
+                        self.conversation_history = self.conversation_history[-10:]
+                        
             except Exception as e:
                 result = f"Generation error: {e}"
             
