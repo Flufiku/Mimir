@@ -163,9 +163,8 @@ class MimirApp:
         
         # Configure grid weights for resizing
         self.input_frame.columnconfigure(0, weight=0)  # Make column 0 expandable
-        self.input_frame.columnconfigure(1, weight=0)  # Keep column 1 fixed
-        self.input_frame.columnconfigure(2, weight=1)  # Keep column 2 fixed
-        self.input_frame.columnconfigure(3, weight=0)  # Keep column 3 fixed
+        self.input_frame.columnconfigure(1, weight=1)  # Keep column 1 fixed
+        self.input_frame.columnconfigure(2, weight=0)  # Keep column 2 fixed
         self.input_frame.rowconfigure(0, weight=1)     # Make row 0 (text field area) expandable
         self.input_frame.rowconfigure(1, weight=0)     # Keep row 1 (buttons) fixed
         
@@ -178,21 +177,17 @@ class MimirApp:
         self.text_entry.bind('<Shift-Return>', lambda event: self.text_entry.insert(tk.INSERT, '\n'))
         self.text_entry.bind('<Control-Return>', lambda event: self.text_entry.insert(tk.INSERT, '\n'))
         
-        # Close button (bottom left)
-        self.close_button = ttk.Button(self.input_frame, text="Close", command=self.quit_app)
-        self.close_button.grid(row=1, column=0, sticky=tk.W)
-        
-        # New Chat button (bottom left-center)
-        self.new_chat_button = ttk.Button(self.input_frame, text="New Chat", command=self.clear_conversation_history)
-        self.new_chat_button.grid(row=1, column=1, sticky=tk.W, padx=(0, 0))
-        
         # Settings button (bottom center)
         self.settings_button = ttk.Button(self.input_frame, text="Settings", command=self.show_settings_page)
-        self.settings_button.grid(row=1, column=2, sticky=tk.W, padx=(0, 0))
+        self.settings_button.grid(row=1, column=0, sticky=tk.W)
+        
+        # New Chat button (bottom left)
+        self.new_chat_button = ttk.Button(self.input_frame, text="New Chat", command=self.clear_conversation_history)
+        self.new_chat_button.grid(row=1, column=1, sticky=tk.E)
         
         # Send button (bottom right)
         self.send_button = ttk.Button(self.input_frame, text="Send", command=self.send_text)
-        self.send_button.grid(row=1, column=3, sticky=tk.E)
+        self.send_button.grid(row=1, column=2, sticky=tk.E)
         
     def create_output_frame(self):
         """Create the output page frame"""
@@ -200,7 +195,6 @@ class MimirApp:
         
         # Configure grid weights for output page
         self.output_frame.columnconfigure(0, weight=1)
-        self.output_frame.columnconfigure(1, weight=0)
         self.output_frame.rowconfigure(0, weight=1)
         self.output_frame.rowconfigure(1, weight=0)
         
@@ -208,13 +202,16 @@ class MimirApp:
         self.output_text = tk.Text(self.output_frame, wrap=tk.WORD, state=tk.DISABLED)
         self.output_text.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
-        # Close button (bottom right)
-        self.close_output_button = ttk.Button(self.output_frame, text="Close", command=self.quit_app)
-        self.close_output_button.grid(row=1, column=0, sticky=tk.W)
-        
-        # Back button (bottom left)
+        # Back button (bottom right)
         self.back_button = ttk.Button(self.output_frame, text="Back", command=self.show_input_page)
-        self.back_button.grid(row=1, column=1, sticky=tk.E)
+        self.back_button.grid(row=1, column=0, sticky=tk.E)
+        
+        # Bind Enter key to back button on the root window when output frame is shown
+        def on_enter_key(event):
+            self.show_input_page()
+            return "break"
+        
+        self.output_frame.on_enter_key = on_enter_key  # Store reference for later use
 
     def create_settings_frame(self):
         """Create the settings page frame"""
@@ -388,6 +385,10 @@ class MimirApp:
         self.settings_frame.grid_remove()  # Hide settings frame
         self.output_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show output frame 
         
+        # Bind Enter key for back functionality and focus the frame
+        self.root.bind('<Return>', self.output_frame.on_enter_key)
+        self.output_frame.focus_set()
+        
     def show_settings_page(self):
         """Show the settings page frame"""
         self.input_frame.grid_remove()  # Hide input frame
@@ -472,7 +473,6 @@ class MimirApp:
     def clear_conversation_history(self):
         """Clear the conversation history"""
         self.conversation_history = []
-        messagebox.showinfo("History Cleared", "Conversation history has been cleared.")
     
     def create_history_prompt(self):
         """Create a prompt string from conversation history using ChatML format"""
