@@ -8,6 +8,11 @@ import os
 import json
 import keyboard
 from llama_cpp import Llama
+import whisper
+import sounddevice as sd
+import numpy as np
+import tempfile
+import wave
 
 class MimirApp:
     def __init__(self):
@@ -20,6 +25,12 @@ class MimirApp:
         
         # LLM setup - model will be loaded based on config
         self.llm = None
+        
+        # Speech recognition setup
+        self.whisper_model = None
+        self.is_recording = False
+        self.recording_data = []
+        self.recording_stream = None
         
         # Conversation history
         self.conversation_history = []  # List of tuples: (user_message, ai_response)
@@ -98,8 +109,14 @@ class MimirApp:
             hotkey = self.get_config_value("open_text_key")
             keyboard.add_hotkey(hotkey, self.show_window_and_focus)
             print(f"Global hotkey '{hotkey}' registered successfully")
+            
+            # Setup speech recording hotkey
+            speech_hotkey = self.get_config_value("speech_hotkey")
+            keyboard.on_press_key(speech_hotkey, self.start_speech_recording)
+            keyboard.on_release_key(speech_hotkey, self.stop_speech_recording)
+            print(f"Speech hotkey '{speech_hotkey}' registered successfully")
         except Exception as e:
-            print(f"Failed to setup global hotkey: {e}")
+            print(f"Failed to setup global hotkeys: {e}")
     
     def show_window_and_focus(self):
         """Show window from minimization/tray and focus on text entry"""
@@ -118,6 +135,142 @@ class MimirApp:
         # Schedule the UI update on the main thread
         self.root.after(0, _show_and_focus)
         
+    def start_speech_recording(self, e):
+        """Start recording audio when speech hotkey is pressed"""
+        if self.is_recording:
+            return
+            
+        try:
+            # Show window and indicate recording
+            self.show_window_and_focus()
+            
+            # Start recording
+            self.is_recording = True
+            self.recording_data = []
+            
+            # Get sample rate from config
+            sample_rate = self.get_config_value("speech_sample_rate")
+            
+            # Start recording stream
+            def audio_callback(indata, frames, time, status):
+                if self.is_recording:
+                    self.recording_data.append(indata.copy())
+            
+            self.recording_stream = sd.InputStream(
+                samplerate=sample_rate,
+                channels=1,
+                dtype=np.float32,
+                callback=audio_callback
+            )
+            self.recording_stream.start()
+            
+            # Update UI to show recording status
+            self.set_status("Recording... (Release F14 to stop)")
+            
+        except Exception as e:
+            print(f"Failed to start recording: {e}")
+            
+    def stop_speech_recording(self, e):
+        """Stop recording audio when speech hotkey is released"""
+        if not self.is_recording:
+            return
+            
+        try:
+            self.is_recording = False
+            
+            # Stop recording stream
+            if self.recording_stream:
+                self.recording_stream.stop()
+                self.recording_stream.close()
+                self.recording_stream = None
+            
+            # Update UI to show processing status
+            self.set_status("Processing speech...")
+            
+            # Process the recorded audio
+            if self.recording_data:
+                threading.Thread(target=self.process_speech_recording, daemon=True).start()
+            else:
+                # Clear the processing message if no audio was recorded
+                self.root.after(1000, self.clear_status)
+                
+        except Exception as e:
+            print(f"Failed to stop recording: {e}")
+            
+    def process_speech_recording(self):
+        """Process the recorded audio and transcribe it using Whisper"""
+        try:
+            # Concatenate all recorded chunks
+            if not self.recording_data:
+                return
+                
+            audio_data = np.concatenate(self.recording_data, axis=0)
+            sample_rate = self.get_config_value("speech_sample_rate")
+            
+            # Save audio to temporary WAV file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                # Convert float32 to int16
+                audio_int16 = (audio_data * 32767).astype(np.int16)
+                
+                # Write WAV file
+                with wave.open(temp_file.name, 'wb') as wav_file:
+                    wav_file.setnchannels(1)  # Mono
+                    wav_file.setsampwidth(2)  # 2 bytes per sample (int16)
+                    wav_file.setframerate(sample_rate)
+                    wav_file.writeframes(audio_int16.tobytes())
+                
+                temp_file_path = temp_file.name
+            
+            # Load Whisper model if not loaded
+            if self.whisper_model is None:
+                model_size = self.get_config_value("whisper_model_size")
+                self.whisper_model = whisper.load_model(model_size)
+            
+            # Transcribe audio
+            result = self.whisper_model.transcribe(temp_file_path)
+            transcribed_text = result["text"].strip()
+            
+            # Clean up temporary file
+            os.unlink(temp_file_path)
+            
+            # Update UI with transcribed text
+            def _update_with_transcription():
+                if transcribed_text:
+                    # Insert at the current cursor position or at the end if no cursor position
+                    try:
+                        # Get current cursor position
+                        cursor_pos = self.text_entry.index(tk.INSERT)
+                        # Insert at cursor position
+                        self.text_entry.insert(cursor_pos, transcribed_text)
+                    except:
+                        # Fallback to inserting at the end
+                        self.text_entry.insert(tk.END, transcribed_text)
+                    
+                    self.text_entry.focus_set()
+                    self.set_status_with_timeout("Speech transcribed successfully", 2000)
+                else:
+                    self.set_status_with_timeout("No speech detected", 2000)
+                    
+            self.root.after(0, _update_with_transcription)
+            
+        except Exception as e:
+            print(f"Failed to process speech: {e}")
+            # Clear processing message on error
+            self.set_status_with_timeout("Speech processing failed", 3000)
+            
+    def get_available_microphones(self):
+        """Get list of available microphone devices"""
+        try:
+            devices = sd.query_devices()
+            microphones = []
+            for i, device in enumerate(devices):
+                if device['max_input_channels'] > 0:  # Input device
+                    microphones.append(f"{i}: {device['name']}")
+            return microphones
+        except Exception as e:
+            print(f"Failed to get microphones: {e}")
+            return ["default"]
+        
     def start_tray(self):
         """Start the tray icon in a separate thread"""
         self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
@@ -130,17 +283,9 @@ class MimirApp:
         if not text:
             return
         
-        # Show output page and indicate generation
+        # Show output page and clear output
         self.output_text.config(state=tk.NORMAL)
         self.output_text.delete("1.0", tk.END)
-        
-        # Check if model needs to be loaded
-        keep_loaded = self.get_config_value("keep_model_loaded")
-        if self.llm is None and not keep_loaded:
-            self.output_text.insert(tk.END, "Loading model and generating...")
-        else:
-            self.output_text.insert(tk.END, "Generating...")
-        
         self.output_text.config(state=tk.DISABLED)
         
         # Clear input text
@@ -148,6 +293,13 @@ class MimirApp:
         
         # Show output page
         self.show_output_page()
+        
+        # Show status message after switching to output page
+        keep_loaded = self.get_config_value("keep_model_loaded")
+        if self.llm is None and not keep_loaded:
+            self.set_status("Loading model and generating...")
+        else:
+            self.set_status("Generating...")
         
         # Generate in background to keep UI responsive
         threading.Thread(target=self._generate_and_update, args=(text,), daemon=True).start()
@@ -166,28 +318,54 @@ class MimirApp:
         self.input_frame.columnconfigure(1, weight=1)  # Keep column 1 fixed
         self.input_frame.columnconfigure(2, weight=0)  # Keep column 2 fixed
         self.input_frame.rowconfigure(0, weight=1)     # Make row 0 (text field area) expandable
-        self.input_frame.rowconfigure(1, weight=0)     # Keep row 1 (buttons) fixed
+        self.input_frame.rowconfigure(1, weight=0)     # Keep row 1 (status) fixed
+        self.input_frame.rowconfigure(2, weight=0)     # Keep row 2 (buttons) fixed
         
         # Text input field - spans most of the window
         self.text_entry = tk.Text(self.input_frame, wrap=tk.WORD)
-        self.text_entry.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        self.text_entry.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
         
         # Bind Enter key to send button (Shift+Enter and Ctrl+Enter for new line)
         self.text_entry.bind('<Return>', lambda event: self.send_text_from_key(event))
         self.text_entry.bind('<Shift-Return>', lambda event: self.text_entry.insert(tk.INSERT, '\n'))
         self.text_entry.bind('<Control-Return>', lambda event: self.text_entry.insert(tk.INSERT, '\n'))
         
+        # Status label above the buttons
+        self.status_label = ttk.Label(self.input_frame, text="", foreground="gray")
+        self.status_label.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(0, 5))
+        
+        # Buttons row
         # Settings button (bottom center)
         self.settings_button = ttk.Button(self.input_frame, text="Settings", command=self.show_settings_page)
-        self.settings_button.grid(row=1, column=0, sticky=tk.W)
+        self.settings_button.grid(row=2, column=0, sticky=tk.W)
         
         # New Chat button (bottom left)
         self.new_chat_button = ttk.Button(self.input_frame, text="New Chat", command=self.clear_conversation_history)
-        self.new_chat_button.grid(row=1, column=1, sticky=tk.E)
+        self.new_chat_button.grid(row=2, column=1, sticky=tk.E)
         
         # Send button (bottom right)
         self.send_button = ttk.Button(self.input_frame, text="Send", command=self.send_text)
-        self.send_button.grid(row=1, column=2, sticky=tk.E)
+        self.send_button.grid(row=2, column=2, sticky=tk.E)
+        
+    def set_status(self, message):
+        """Set the status message in the status label"""
+        def _update_status():
+            if hasattr(self, 'status_label'):
+                self.status_label.config(text=message)
+            if hasattr(self, 'output_status_label'):
+                self.output_status_label.config(text=message)
+        
+        # Update on main thread
+        self.root.after(0, _update_status)
+        
+    def clear_status(self):
+        """Clear the status message"""
+        self.set_status("")
+        
+    def set_status_with_timeout(self, message, timeout_ms=3000):
+        """Set status message and clear it after timeout"""
+        self.set_status(message)
+        self.root.after(timeout_ms, self.clear_status)
         
     def create_output_frame(self):
         """Create the output page frame"""
@@ -197,14 +375,19 @@ class MimirApp:
         self.output_frame.columnconfigure(0, weight=1)
         self.output_frame.rowconfigure(0, weight=1)
         self.output_frame.rowconfigure(1, weight=0)
+        self.output_frame.rowconfigure(2, weight=0)
         
         # Output text field
         self.output_text = tk.Text(self.output_frame, wrap=tk.WORD, state=tk.DISABLED)
-        self.output_text.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        self.output_text.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
+        
+        # Status label for output page
+        self.output_status_label = ttk.Label(self.output_frame, text="", foreground="gray")
+        self.output_status_label.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         
         # Back button (bottom right)
         self.back_button = ttk.Button(self.output_frame, text="Back", command=self.show_input_page)
-        self.back_button.grid(row=1, column=0, sticky=tk.E)
+        self.back_button.grid(row=2, column=0, sticky=tk.E)
         
         # Bind Enter key to back button on the root window when output frame is shown
         def on_enter_key(event):
@@ -303,7 +486,11 @@ class MimirApp:
             "llm_n_ubatch": "Micro-batch size for processing tokens",
             "llm_system_prompt": "System prompt that defines the AI assistant's behavior",
             "open_text_key": "Global hotkey to open the text input window",
-            "conversation_history_length": "Number of previous message pairs to remember in conversation history"
+            "conversation_history_length": "Number of previous message pairs to remember in conversation history",
+            "speech_hotkey": "Hotkey to start/stop speech recording (hold to record, release to stop)",
+            "whisper_model_size": "Whisper model size (tiny, base, small, medium, large, turbo)",
+            "microphone_device": "Microphone device to use for speech input",
+            "speech_sample_rate": "Sample rate for audio recording (Hz)"
         }
         
         # Configure the main grid for proper alignment
@@ -353,6 +540,46 @@ class MimirApp:
                 
                 widget = path_frame
                 
+            elif setting_key == "whisper_model_size":
+                # Dropdown for Whisper model size
+                var = tk.StringVar(value=setting_value)
+                model_sizes = ["tiny", "base", "small", "medium", "large", "turbo"]
+                widget = ttk.Combobox(self.settings_scrollable_frame, textvariable=var, 
+                                    values=model_sizes, state="readonly", width=30)
+                widget.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+                
+            elif setting_key == "microphone_device":
+                # Dropdown for microphone device
+                var = tk.StringVar(value=setting_value)
+                
+                # Create frame for dropdown and refresh button
+                mic_frame = ttk.Frame(self.settings_scrollable_frame)
+                mic_frame.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
+                mic_frame.columnconfigure(0, weight=1)
+                
+                # Get available microphones
+                try:
+                    microphones = self.get_available_microphones()
+                except:
+                    microphones = ["default"]
+                
+                mic_combo = ttk.Combobox(mic_frame, textvariable=var, 
+                                       values=microphones, state="readonly")
+                mic_combo.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+                
+                # Refresh button to update microphone list
+                def refresh_mics():
+                    try:
+                        new_mics = self.get_available_microphones()
+                        mic_combo['values'] = new_mics
+                    except Exception as e:
+                        print(f"Failed to refresh microphones: {e}")
+                
+                refresh_button = ttk.Button(mic_frame, text="Refresh", command=refresh_mics)
+                refresh_button.grid(row=0, column=1, sticky=tk.E)
+                
+                widget = mic_frame
+                
             else:
                 # Text entry for string values
                 var = tk.StringVar(value=setting_value)
@@ -399,6 +626,7 @@ class MimirApp:
         self.settings_frame.grid_remove()  # Hide settings frame
         self.input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show input frame
         self.text_entry.focus()  # Focus on text entry
+        self.clear_status()  # Clear any lingering status messages
         
     def show_output_page(self):
         """Show the output page frame"""
@@ -489,12 +717,16 @@ class MimirApp:
             # Reset LLM if model path changed
             self.llm = None
             
+            # Reset Whisper model if model size changed
+            self.whisper_model = None
+            
         except Exception as e:
             messagebox.showerror("Save Error", f"Failed to save settings: {e}")
             
     def clear_conversation_history(self):
         """Clear the conversation history"""
         self.conversation_history = []
+        self.set_status_with_timeout("Conversation history cleared", 2000)
     
     def create_history_prompt(self):
         """Create a prompt string from conversation history using ChatML format"""
@@ -564,6 +796,7 @@ class MimirApp:
                     self.output_text.delete("1.0", tk.END)
                     self.output_text.insert(tk.END, result)
                     self.output_text.config(state=tk.DISABLED)
+                    self.clear_status()
                 self.root.after(0, _update)
                 return
         
@@ -615,10 +848,22 @@ class MimirApp:
             self.output_text.delete("1.0", tk.END)
             self.output_text.insert(tk.END, result)
             self.output_text.config(state=tk.DISABLED)
+            # Clear the status message
+            self.clear_status()
         self.root.after(0, _update)
         
     def quit_app(self, icon=None, item=None):
         """Completely quit the application"""
+        # Stop any ongoing recording
+        if hasattr(self, 'is_recording') and self.is_recording:
+            self.is_recording = False
+            if hasattr(self, 'recording_stream') and self.recording_stream:
+                try:
+                    self.recording_stream.stop()
+                    self.recording_stream.close()
+                except Exception as e:
+                    print(f"Failed to cleanup recording stream: {e}")
+        
         # Cleanup global hotkey
         try:
             keyboard.unhook_all_hotkeys()
