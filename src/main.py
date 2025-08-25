@@ -371,6 +371,27 @@ class MimirApp:
             
             row += 1
 
+    def refresh_settings_values(self):
+        """Refresh all settings values from the config file"""
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                
+            # Update all the widget values with current config values
+            for setting_key, (var_or_widget, original_type) in self.settings_vars.items():
+                if setting_key in config:
+                    if setting_key == "llm_system_prompt":
+                        # Text widget - clear and insert new value
+                        var_or_widget.delete("1.0", tk.END)
+                        var_or_widget.insert("1.0", config[setting_key])
+                    else:
+                        # StringVar, BooleanVar, etc. - set new value
+                        var_or_widget.set(config[setting_key])
+        except Exception as e:
+            # If refresh fails, just continue - the original values will remain
+            pass
+
 
     def show_input_page(self):
         """Show the input page frame"""
@@ -394,6 +415,9 @@ class MimirApp:
         self.input_frame.grid_remove()  # Hide input frame
         self.output_frame.grid_remove()  # Hide output frame
         self.settings_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show settings frame
+        
+        # Refresh settings values from config file
+        self.refresh_settings_values()
         
     def create_tooltip(self, widget, text):
         """Create a tooltip for a widget"""
@@ -462,8 +486,6 @@ class MimirApp:
             with open(config_path, 'w') as f:
                 json.dump(config, f, indent=4)
                 
-            messagebox.showinfo("Settings Saved", "Settings have been saved successfully!")
-            
             # Reset LLM if model path changed
             self.llm = None
             
