@@ -2,8 +2,7 @@ pystray==0.19.5
 Pillow==10.4.0
 llama-cpp-python
 keyboard==0.13.5
-tkinter
-openai-whisper
+faster-whisper
 pyaudio
 sounddevice
 numpy==2.1.0

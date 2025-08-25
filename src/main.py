@@ -8,7 +8,7 @@ import os
 import json
 import keyboard
 from llama_cpp import Llama
-import whisper
+from faster_whisper import WhisperModel
 import sounddevice as sd
 import numpy as np
 import tempfile
@@ -224,11 +224,11 @@ class MimirApp:
             # Load Whisper model if not loaded
             if self.whisper_model is None:
                 model_size = self.get_config_value("whisper_model_size")
-                self.whisper_model = whisper.load_model(model_size)
+                self.whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
             
             # Transcribe audio
-            result = self.whisper_model.transcribe(temp_file_path)
-            transcribed_text = result["text"].strip()
+            segments, info = self.whisper_model.transcribe(temp_file_path)
+            transcribed_text = " ".join([segment.text for segment in segments]).strip()
             
             # Clean up temporary file
             os.unlink(temp_file_path)
