@@ -567,7 +567,7 @@ class MimirApp:
                 entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
                 
                 browse_button = ttk.Button(path_frame, text="Browse", 
-                                         command=lambda: self.browse_file(var, "GGUF Files", "*.gguf"))
+                                         command=lambda: self.browse_file(var, "GGUF Files", "*.gguf", "llm_gguf_path"))
                 browse_button.grid(row=0, column=1, sticky=tk.E)
                 
                 widget = path_frame
@@ -749,11 +749,31 @@ class MimirApp:
         except ValueError:
             return False
             
-    def browse_file(self, var, file_type, file_extension):
+    def browse_file(self, var, file_type, file_extension, config_key=None):
         """Open file browser and set the selected file path"""
+        # Get the directory of the currently saved file path from config
+        initial_dir = None
+        
+        if config_key:
+            try:
+                current_path = self.get_config_value(config_key)
+                if current_path and os.path.exists(current_path):
+                    # If current path exists, use its directory
+                    initial_dir = os.path.dirname(current_path)
+                elif current_path:
+                    # If current path doesn't exist but is set, try to use its directory anyway
+                    # (in case the file was moved but the directory still exists)
+                    potential_dir = os.path.dirname(current_path)
+                    if os.path.exists(potential_dir):
+                        initial_dir = potential_dir
+            except:
+                # If there's any error reading config, fall back to no initial directory
+                pass
+        
         filename = filedialog.askopenfilename(
             title=f"Select {file_type}",
-            filetypes=[(file_type, file_extension), ("All files", "*.*")]
+            filetypes=[(file_type, file_extension), ("All files", "*.*")],
+            initialdir=initial_dir
         )
         if filename:
             var.set(filename)
