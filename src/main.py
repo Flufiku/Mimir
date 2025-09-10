@@ -1,3 +1,7 @@
+import warnings
+# Suppress the pkg_resources deprecation warning from ctranslate2
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pystray
@@ -40,6 +44,14 @@ class MimirApp:
             keep_loaded = self.get_config_value("keep_model_loaded")
             if keep_loaded:
                 threading.Thread(target=self.init_llm, daemon=True).start()
+        except:
+            pass  # If config fails, just continue without pre-loading
+            
+        # Check if we should pre-load the Whisper model
+        try:
+            keep_whisper_loaded = self.get_config_value("keep_whisper_loaded")
+            if keep_whisper_loaded:
+                threading.Thread(target=self.init_whisper, daemon=True).start()
         except:
             pass  # If config fails, just continue without pre-loading
         
@@ -229,6 +241,15 @@ class MimirApp:
             # Transcribe audio
             segments, info = self.whisper_model.transcribe(temp_file_path)
             transcribed_text = " ".join([segment.text for segment in segments]).strip()
+            
+            # Unload Whisper model if keep_whisper_loaded is False
+            try:
+                keep_whisper_loaded = self.get_config_value("keep_whisper_loaded")
+                if not keep_whisper_loaded:
+                    self.whisper_model = None
+            except Exception:
+                # If config fails, keep the model loaded (default behavior)
+                pass
             
             # Clean up temporary file
             os.unlink(temp_file_path)
@@ -447,6 +468,16 @@ class MimirApp:
         # Load current config and create settings widgets
         self.settings_vars = {}
         self.create_settings_widgets()
+    
+    def disable_combobox_scroll(self, combobox):
+        """Disable mouse wheel scrolling on combobox to prevent accidental selection changes"""
+        def ignore_scroll(event):
+            # Don't process the event, effectively ignoring mouse wheel
+            return "break"
+        
+        combobox.bind("<MouseWheel>", ignore_scroll)
+        combobox.bind("<Button-4>", ignore_scroll)  # Linux scroll up
+        combobox.bind("<Button-5>", ignore_scroll)  # Linux scroll down
         
         # Buttons frame
         self.settings_buttons_frame = ttk.Frame(self.settings_frame)
@@ -489,6 +520,7 @@ class MimirApp:
             "conversation_history_length": "Number of previous message pairs to remember in conversation history",
             "speech_hotkey": "Hotkey to start/stop speech recording (hold to record, release to stop)",
             "whisper_model_size": "Whisper model size (tiny, base, small, medium, large, turbo)",
+            "keep_whisper_loaded": "Whether to keep the Whisper model loaded in memory for faster speech recognition",
             "microphone_device": "Microphone device to use for speech input",
             "speech_sample_rate": "Sample rate for audio recording (Hz)"
         }
@@ -548,6 +580,9 @@ class MimirApp:
                                     values=model_sizes, state="readonly", width=30)
                 widget.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=5)
                 
+                # Disable scroll-through behavior on this combobox
+                self.disable_combobox_scroll(widget)
+                
             elif setting_key == "microphone_device":
                 # Dropdown for microphone device
                 var = tk.StringVar(value=setting_value)
@@ -566,6 +601,9 @@ class MimirApp:
                 mic_combo = ttk.Combobox(mic_frame, textvariable=var, 
                                        values=microphones, state="readonly")
                 mic_combo.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+                
+                # Disable scroll-through behavior on this combobox
+                self.disable_combobox_scroll(mic_combo)
                 
                 # Refresh button to update microphone list
                 def refresh_mics():
@@ -650,21 +688,54 @@ class MimirApp:
     def create_tooltip(self, widget, text):
         """Create a tooltip for a widget"""
         def on_enter(event):
-            tooltip = tk.Toplevel()
-            tooltip.wm_overrideredirect(True)
-            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
-            
-            label = tk.Label(tooltip, text=text, background="lightyellow", 
-                           relief="solid", borderwidth=1, font=("Arial", "8", "normal"))
-            label.pack()
-            
-            widget.tooltip = tooltip
+            try:
+                # Create tooltip window
+                tooltip = tk.Toplevel(self.root)
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_attributes('-topmost', True)
+                
+                # Calculate position relative to widget
+                x = widget.winfo_rootx() + 10
+                y = widget.winfo_rooty() + widget.winfo_height() + 5
+                
+                # Ensure tooltip doesn't go off screen
+                screen_width = tooltip.winfo_screenwidth()
+                screen_height = tooltip.winfo_screenheight()
+                
+                # Rough estimate of tooltip size for positioning
+                estimated_width = len(text) * 7  # rough character width
+                estimated_height = 30  # rough height
+                
+                if x + estimated_width > screen_width:
+                    x = screen_width - estimated_width - 10
+                if y + estimated_height > screen_height:
+                    y = widget.winfo_rooty() - estimated_height - 5
+                    
+                tooltip.wm_geometry(f"+{x}+{y}")
+                
+                # Create tooltip label with word wrapping for long text
+                label = tk.Label(tooltip, text=text, background="#ffffcc", 
+                               relief="solid", borderwidth=1, font=("Arial", "9", "normal"),
+                               wraplength=300, justify=tk.LEFT, padx=5, pady=3)
+                label.pack()
+                
+                # Store tooltip reference on widget
+                widget.tooltip = tooltip
+                
+            except Exception as e:
+                # If tooltip creation fails, just continue silently
+                print(f"Tooltip creation failed: {e}")
             
         def on_leave(event):
-            if hasattr(widget, 'tooltip'):
-                widget.tooltip.destroy()
-                del widget.tooltip
+            try:
+                if hasattr(widget, 'tooltip') and widget.tooltip:
+                    widget.tooltip.destroy()
+                    widget.tooltip = None
+            except Exception as e:
+                # If tooltip destruction fails, just continue silently
+                print(f"Tooltip destruction failed: {e}")
                 
+        # Bind events to the widget
         widget.bind("<Enter>", on_enter)
         widget.bind("<Leave>", on_leave)
         
@@ -780,6 +851,16 @@ class MimirApp:
             print(f"LLM Load Error: {e}")
             self.root.after(0, lambda: messagebox.showerror("LLM Load Error", str(e)))
             
+    def init_whisper(self):
+        """Load the Whisper model for speech recognition"""
+        try:
+            model_size = self.get_config_value("whisper_model_size")
+            self.whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            print(f"Whisper model '{model_size}' loaded successfully")
+        except Exception as e:
+            self.whisper_model = None
+            print(f"Whisper Load Error: {e}")
+            
     def _generate_and_update(self, prompt: str):
         """Run inference and push result back to UI thread"""
         # Check if we should keep model loaded
@@ -882,7 +963,7 @@ class MimirApp:
             self.root.mainloop()
         except KeyboardInterrupt:
             self.quit_app()
-
+            
 if __name__ == "__main__":
     app = MimirApp()
     app.run()

@@ -14,6 +14,7 @@
     "open_text_key": "f13",
     "speech_hotkey": "f14",
     "whisper_model_size": "small",
+    "keep_whisper_loaded": true,
     "microphone_device": "1: Mikrofon (USB Condenser Microph",
     "speech_sample_rate": 16000
 }
