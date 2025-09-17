@@ -19,42 +19,6 @@ import tempfile
 import wave
 
 class MimirApp:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.setup_window()
-        self.setup_widgets()
-        self.setup_tray()
-        self.setup_global_hotkey()
-        self.start_tray()
-        
-        # LLM setup - model will be loaded based on config
-        self.llm = None
-        
-        # Speech recognition setup
-        self.whisper_model = None
-        self.is_recording = False
-        self.recording_data = []
-        self.recording_stream = None
-        
-        # Conversation history
-        self.conversation_history = []  # List of tuples: (user_message, ai_response)
-        
-        # Check if we should pre-load the model
-        try:
-            keep_loaded = self.get_config_value("keep_model_loaded")
-            if keep_loaded:
-                threading.Thread(target=self.init_llm, daemon=True).start()
-        except:
-            pass  # If config fails, just continue without pre-loading
-            
-        # Check if we should pre-load the Whisper model
-        try:
-            keep_whisper_loaded = self.get_config_value("keep_whisper_loaded")
-            if keep_whisper_loaded:
-                threading.Thread(target=self.init_whisper, daemon=True).start()
-        except:
-            pass  # If config fails, just continue without pre-loading
-        
     def get_config_value(self, key):
         """Get a value from config.json, raise error if key doesn't exist"""
         config_path = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -68,37 +32,77 @@ class MimirApp:
             raise FileNotFoundError(f"Configuration file not found at {config_path}")
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
-        
-    def setup_window(self):
-        """Configure the main window"""
-        self.root.title("Mimir")
-        self.root.geometry("540x360")
-        self.root.resizable(True, True)
-        
-        # Set window icon using the ICO file
-        icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'icon.ico')
-        self.root.iconbitmap(icon_path)
-        
-        # Keep window always on top
-        self.root.attributes('-topmost', True)
-        
-        # Handle window close event to minimize to tray instead of closing
-        self.root.protocol("WM_DELETE_WINDOW", self.minimize_to_tray)
-        
     def setup_widgets(self):
         """Create and arrange the GUI widgets"""
         # Configure root window grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        
         # Create frames but only show one at a time
         self.create_input_frame()
         self.create_output_frame()
         self.create_settings_frame()
-        
         # Show input frame initially
         self.show_input_page()
-        
+    def __init__(self):
+        self.root = tk.Tk()
+        self.setup_window()
+        self.setup_widgets()
+        self.setup_tray()
+        self.setup_global_hotkey()
+        self.start_tray()
+        # LLM setup - model will be loaded based on config
+        self.llm = None
+        # Speech recognition setup
+        self.whisper_model = None
+        self.is_recording = False
+        self.recording_data = []
+        self.recording_stream = None
+        # Conversation history
+        self.conversation_history = []  # List of tuples: (user_message, ai_response)
+        # Screenshot and processing
+        self.screenshot_image = None
+        self.screenshot_ocr_text = None
+        self.screenshot_description = None
+        self.screenshot_processed = False
+        self.screenshot_enabled = False  # Checkbox state
+        # Screenshot settings
+        try:
+            self.screenshot_process_immediately = self.get_config_value("screenshot_process_immediately")
+            self.keep_screenshot_models_loaded = self.get_config_value("keep_screenshot_models_loaded")
+        except:
+            self.screenshot_process_immediately = False
+            self.keep_screenshot_models_loaded = False
+        # Pre-load models if needed
+        try:
+            keep_loaded = self.get_config_value("keep_model_loaded")
+            if keep_loaded:
+                threading.Thread(target=self.init_llm, daemon=True).start()
+        except:
+            pass
+        try:
+            keep_whisper_loaded = self.get_config_value("keep_whisper_loaded")
+            if keep_whisper_loaded:
+                threading.Thread(target=self.init_whisper, daemon=True).start()
+        except:
+            pass
+    def setup_window(self):
+        """Configure the main window"""
+        self.root.title("Mimir")
+        self.root.geometry("540x360")
+        self.root.resizable(True, True)
+        # Set window icon using the ICO file
+        icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'icon.ico')
+        self.root.iconbitmap(icon_path)
+        # Keep window always on top
+        self.root.attributes('-topmost', True)
+        # Handle window close event to minimize to tray instead of closing
+        self.root.protocol("WM_DELETE_WINDOW", self.minimize_to_tray)
+        try:
+            self.screenshot_process_immediately = self.get_config_value("screenshot_process_immediately")
+            self.keep_screenshot_models_loaded = self.get_config_value("keep_screenshot_models_loaded")
+        except:
+            self.screenshot_process_immediately = False
+            self.keep_screenshot_models_loaded = False
     def setup_tray(self):
         """Setup system tray icon and menu"""
         # Create tray menu
@@ -367,6 +371,21 @@ class MimirApp:
         # Send button (bottom right)
         self.send_button = ttk.Button(self.input_frame, text="Send", command=self.send_text)
         self.send_button.grid(row=2, column=2, sticky=tk.E)
+
+        # Screenshot info checkbox (bottom, default off)
+        self.screenshot_checkbox_var = tk.BooleanVar(value=False)
+        self.screenshot_checkbox = ttk.Checkbutton(
+            self.input_frame,
+            text="Include screenshot info in prompt",
+            variable=self.screenshot_checkbox_var,
+            command=self.on_screenshot_checkbox_toggle
+        )
+        self.screenshot_checkbox.grid(row=3, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(5, 0))
+
+    def on_screenshot_checkbox_toggle(self):
+        """Handle screenshot info checkbox toggle"""
+        self.screenshot_enabled = self.screenshot_checkbox_var.get()
+
         
     def set_status(self, message):
         """Set the status message in the status label"""
@@ -665,6 +684,10 @@ class MimirApp:
         self.input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))  # Show input frame
         self.text_entry.focus()  # Focus on text entry
         self.clear_status()  # Clear any lingering status messages
+        # Reset screenshot checkbox every time input page is shown
+        if hasattr(self, 'screenshot_checkbox_var'):
+            self.screenshot_checkbox_var.set(False)
+            self.screenshot_enabled = False
         
     def show_output_page(self):
         """Show the output page frame"""
@@ -822,13 +845,25 @@ class MimirApp:
     def create_history_prompt(self):
         """Create a prompt string from conversation history using ChatML format"""
         if not self.conversation_history:
-            return ""
-        
-        history_prompt = ""
-        for user_msg, ai_response in self.conversation_history:
-            history_prompt += f"<|im_start|>user\n{user_msg}<|im_end|>\n"
-            history_prompt += f"<|im_start|>assistant\n{ai_response}<|im_end|>\n"
-        
+            history_prompt = ""
+        else:
+            history_prompt = ""
+            for user_msg, ai_response in self.conversation_history:
+                history_prompt += f"<|im_start|>user\n{user_msg}<|im_end|>\n"
+                history_prompt += f"<|im_start|>assistant\n{ai_response}<|im_end|>\n"
+
+        # If screenshot info is enabled, add OCR and description
+        if getattr(self, 'screenshot_enabled', False):
+            # If screenshot not processed yet and processing is deferred, process now
+            if not self.screenshot_processed and not self.screenshot_process_immediately:
+                self.process_screenshot()
+            screenshot_info = ""
+            if self.screenshot_ocr_text:
+                screenshot_info += f"\n[Screenshot OCR]\n{self.screenshot_ocr_text.strip()}"
+            if self.screenshot_description:
+                screenshot_info += f"\n[Screenshot Description]\n{self.screenshot_description.strip()}"
+            if screenshot_info:
+                history_prompt += f"\n[Screenshot Information]{screenshot_info}\n"
         return history_prompt
 
     def minimize_to_tray(self):
@@ -841,6 +876,52 @@ class MimirApp:
         self.root.deiconify()  # Show the window
         self.root.lift()  # Bring to front
         self.root.attributes('-topmost', True)  # Ensure it stays on top
+        # Screenshot capture
+        self.capture_screenshot()
+        if self.screenshot_process_immediately:
+            self.process_screenshot()
+    def capture_screenshot(self):
+        """Capture a screenshot of the current screen and store as PIL Image"""
+        try:
+            import pyautogui
+            screenshot = pyautogui.screenshot()
+            self.screenshot_image = screenshot
+            self.screenshot_processed = False
+        except Exception as e:
+            print(f"Failed to capture screenshot: {e}")
+
+    def process_screenshot(self):
+        """Process screenshot with OCR (TrOCR) and image description models"""
+        if self.screenshot_image is None:
+            return
+        # OCR with TrOCR
+        try:
+            from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+            import torch
+            if not hasattr(self, 'trocr_processor') or not self.keep_screenshot_models_loaded:
+                self.trocr_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed')
+                self.trocr_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed')
+            image = self.screenshot_image.convert('RGB')
+            pixel_values = self.trocr_processor(images=image, return_tensors='pt').pixel_values
+            generated_ids = self.trocr_model.generate(pixel_values)
+            self.screenshot_ocr_text = self.trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        except Exception as e:
+            print(f"OCR failed: {e}")
+            self.screenshot_ocr_text = None
+        # Image description
+        try:
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            import torch
+            if not hasattr(self, 'blip_processor') or not self.keep_screenshot_models_loaded:
+                self.blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+                self.blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+            inputs = self.blip_processor(self.screenshot_image, return_tensors="pt")
+            out = self.blip_model.generate(**inputs)
+            self.screenshot_description = self.blip_processor.decode(out[0], skip_special_tokens=True)
+        except Exception as e:
+            print(f"Image description failed: {e}")
+            self.screenshot_description = None
+        self.screenshot_processed = True
         
     def init_llm(self):
         """Load the GGUF model for CPU operation"""

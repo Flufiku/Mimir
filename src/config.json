@@ -17,4 +17,7 @@
     "keep_whisper_loaded": true,
     "microphone_device": "1: Mikrofon (USB Condenser Microph",
     "speech_sample_rate": 16000
+    ,
+    "screenshot_process_immediately": false,
+    "keep_screenshot_models_loaded": false
 }

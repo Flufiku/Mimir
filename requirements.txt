@@ -6,3 +6,8 @@ faster-whisper
 pyaudio
 sounddevice
 numpy==2.1.0
+pyautogui
+transformers
+torch
+transformers
+torch
