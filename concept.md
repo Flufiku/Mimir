@@ -12,7 +12,7 @@ Mimir is supposed to be a desktop AI Assistant similar to microsofts Recall Feat
 
 ### Nice-To-Haves:
 
-* Voide input using OpenAIs Whisper tool
+* Voice input using OpenAIs Whisper tool
 * Capability of taking a screenshot and analyzing it
 
 
