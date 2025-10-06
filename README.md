@@ -12,7 +12,8 @@ A fully local, fully private AI Assistant.
 ## How to install
 * Download the latest version of the program from the release page
 * Install the modules in requirements.txt
-* Download any .gguf model and select it in the settings menu. (I recommend the dolphin-2.9.4-llama3.1-8b-Q4_K_M available at [HuggingFace](https://huggingface.co/dphn/dolphin-2.9.4-llama3.1-8b-gguf))
+* **Important:** There is no LLM model provided with the program due to it being to large for GitHub. **You need to download one yourself** and set its path in the settings option llm_gguf_path.
+Download any .gguf model and select it in the settings menu. (I recommend the dolphin-2.9.4-llama3.1-8b-Q4_K_M available at [HuggingFace](https://huggingface.co/dphn/dolphin-2.9.4-llama3.1-8b-gguf/resolve/main/dolphin-2.9.4-llama3.1-8b-Q4_K_M.gguf?download=true)) 
 * Start chatting with the AI
 
 
