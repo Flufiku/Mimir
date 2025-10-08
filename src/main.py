@@ -19,9 +19,29 @@ import tempfile
 import wave
 
 class MimirApp:
+    def get_config_path(self):
+        """Get the path to config.json - works in both development and PyInstaller bundle"""
+        if getattr(sys, 'frozen', False):
+            # PyInstaller bundle - config should be next to the exe
+            application_path = os.path.dirname(sys.executable)
+        else:
+            # Development mode - config is in the src directory
+            application_path = os.path.dirname(__file__)
+        
+        config_path = os.path.join(application_path, 'config.json')
+        
+        # If config doesn't exist next to exe, copy from bundled version
+        if getattr(sys, 'frozen', False) and not os.path.exists(config_path):
+            bundled_config = os.path.join(os.path.dirname(__file__), 'config.json')
+            if os.path.exists(bundled_config):
+                import shutil
+                shutil.copy2(bundled_config, config_path)
+        
+        return config_path
+    
     def get_config_value(self, key):
         """Get a value from config.json, raise error if key doesn't exist"""
-        config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+        config_path = self.get_config_path()
         try:
             with open(config_path, 'r') as f:
                 config = json.load(f)
@@ -515,7 +535,7 @@ class MimirApp:
     def create_settings_widgets(self):
         """Create individual setting widgets based on config.json"""
         try:
-            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            config_path = self.get_config_path()
             with open(config_path, 'r') as f:
                 config = json.load(f)
         except Exception as e:
@@ -658,7 +678,7 @@ class MimirApp:
     def refresh_settings_values(self):
         """Refresh all settings values from the config file"""
         try:
-            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            config_path = self.get_config_path()
             with open(config_path, 'r') as f:
                 config = json.load(f)
                 
@@ -824,7 +844,7 @@ class MimirApp:
                     config[setting_key] = str(value)
             
             # Save to file
-            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            config_path = self.get_config_path()
             with open(config_path, 'w') as f:
                 json.dump(config, f, indent=4)
                 
